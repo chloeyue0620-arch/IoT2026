@@ -1,13 +1,13 @@
-# RouterSploit 模块开发实验报告
+# 实验十：RouterSploit 模块开发实验报告
 
 ## 一、实验目的
 
 本次实验围绕 RouterSploit 模块开发展开，旨在完成以下学习目标：
 
-1. **掌握 RouterSploit 模块开发的基本规范和要求**：理解 RouterSploit 框架的模块化设计思想，熟悉漏洞利用模块的文件结构、目录组织方式、类继承关系和接口设计规范，能够独立编写符合框架要求的自定义模块。
-2. **学习编写符合 RouterSploit 框架的漏洞利用模块**：掌握 Exploit、Scanner、Creds、Generic 等不同类型模块的基类继承关系、作用特点和使用场景，重点理解 Exploit 模块中 `run()` 方法和 `check()` 方法的功能分工与实现方式。
-3. **理解 RouterSploit 模块的继承关系和接口设计**：掌握如何在模块中定义目标地址、端口、路径、本地监听地址等参数选项，学习 `OptIP`、`OptPort`、`OptString`、`OptBool`、`OptInteger`、`OptSelection` 等多种选项类型的使用方式，以及 `register_option()` 注册机制和自定义验证器的实现方法。
-4. **掌握模块测试和调试方法**：能够编写单元测试代码，结合 `pytest` 测试框架对自定义模块进行自动化验证；同时能够利用 RouterSploit 控制台的命令行交互结果和报错信息，对模块进行问题排查和修复，为后续编写、复现和分析路由器漏洞利用模块打下基础。
+- **掌握 RouterSploit 模块开发的基本规范和要求**：理解 RouterSploit 框架的模块化设计思想，熟悉漏洞利用模块的文件结构、目录组织方式、类继承关系和接口设计规范，能够独立编写符合框架要求的自定义模块。
+- **学习编写符合 RouterSploit 框架的漏洞利用模块**：掌握 Exploit、Scanner、Creds、Generic 等不同类型模块的基类继承关系、作用特点和使用场景，重点理解 Exploit 模块中 `run()` 方法和 `check()` 方法的功能分工与实现方式。
+- **理解 RouterSploit 模块的继承关系和接口设计**：掌握如何在模块中定义目标地址、端口、路径、本地监听地址等参数选项，学习 `OptIP`、`OptPort`、`OptString`、`OptBool`、`OptInteger`、`OptSelection` 等多种选项类型的使用方式，以及 `register_option()` 注册机制和自定义验证器的实现方法。
+- **掌握模块测试和调试方法**：能够编写单元测试代码，结合 `pytest` 测试框架对自定义模块进行自动化验证；同时能够利用 RouterSploit 控制台的命令行交互结果和报错信息，对模块进行问题排查和修复，为后续编写、复现和分析路由器漏洞利用模块打下基础。
 
 ## 二、实验环境
 
@@ -588,9 +588,9 @@ show info
 
 通过本次实验，完成了从模块目录创建、模块代码编写、选项定义、命令交互测试、单元测试到模块文档补充的完整流程，加深了对 RouterSploit 模块开发规范、接口设计和测试方法的理解。
 
-## 五、实验问题
+## 五、实验问题与解决方法
 
-### `ssl` 参数传递导致模块运行报错
+### （一）`ssl` 参数传递导致模块运行报错
 
 在自定义 RouterSploit 模块编写完成后，模块可以被正常加载，`target`、`port`、`path`、`method`、`timeout` 等参数也能够通过 `set` 命令正常设置。但是在执行 `check` 命令时，程序出现如下报错：
 
@@ -746,3 +746,15 @@ RouterSploit 框架在设计上以模块的**独立运行**为基本原则。每
 - **单元测试编写**：掌握了使用 `unittest` 和 `pytest` 对安全工具模块进行自动化测试的方法，理解了测试驱动开发在安全工具开发中的重要性。
 
 总体来看，本次实验加深了我对 RouterSploit 模块结构和开发流程的理解，提升了我编写、测试和调试安全工具模块的能力，也为后续学习物联网设备安全测试奠定了基础。
+
+## 参考资料
+
+[1] 课程实验资料：《RouterSploit 模块开发指南》（0x10）。
+
+[2] RouterSploit 官方项目仓库：https://github.com/threat9/routersploit
+
+[3] RouterSploit Wiki 文档：https://github.com/threat9/routersploit/wiki
+
+[4] pytest 官方文档：https://docs.pytest.org/
+
+[5] Python `unittest` 标准库文档：https://docs.python.org/3/library/unittest.html
