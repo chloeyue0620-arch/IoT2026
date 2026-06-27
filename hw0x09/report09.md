@@ -1,4 +1,4 @@
-# 第九章：RouterSploit 工具使用
+# 实验九：RouterSploit 工具使用实验报告
 
 ## 一、实验目的
 
@@ -43,6 +43,12 @@
 
 * **实验整体思路**
   本实验先使用 FirmEmuHub 启动 IoT 固件模拟环境，并通过浏览器确认目标 Web 服务正常运行；随后使用 RouterSploit 对目标设备进行漏洞扫描；最后加载漏洞利用模块发送 payload，通过是否获得反向 shell 来判断漏洞利用是否成功。
+
+* **RouterSploit 模块结构**
+  RouterSploit 的漏洞利用模块通常放置在 `routersploit/modules/exploits/` 目录下，并按设备类型和厂商进行组织。本实验由于默认框架中没有直接可用的 Tenda AC9 Samba 命令注入模块，因此按照 RouterSploit 的模块编写规范创建 `routersploit/modules/exploits/routers/tenda/ac9_samba_rce.py`。该模块继承 `HTTPClient`，通过 `target`、`port`、`lhost`、`lport`、`path` 等参数完成目标配置和反向连接配置。
+
+* **自定义利用模块逻辑**
+  自定义模块的 `check()` 方法用于确认目标 Web 服务是否可访问，`run()` 方法负责构造并发送漏洞利用请求。payload 被放入 `usbName` 参数中，并以分号开头拼接 Python 反向 shell 命令；当目标后端将 `usbName` 拼接到系统命令中执行时，目标容器会主动连接攻击者监听端口，从而形成反弹 shell。
 
 
 ## 四、实验内容
@@ -472,21 +478,43 @@ root
 
 ![接收反弹shell并验证权限](image/3-4.png)
 
-## 五、实验问题
+## 五、实验结果验证
+
+本次实验的结果可以从两个方面进行验证。
+
+- **漏洞扫描验证：** RouterSploit 的 AutoPwn 模块在扫描目标 `127.0.0.1:32769` 时，成功识别出 HTTP 服务存在 `exploits/routers/tenda/ac9_samba_rce` 漏洞模块，说明自定义模块已被框架正确加载，并且目标服务满足该模块的基本检测条件。
+
+- **漏洞利用验证：** 在配置 `target`、`port`、`lhost`、`lport` 后，漏洞利用模块能够向 `/goform/SetSambaCfg` 发送包含反向 shell 的 POST 请求。`nc -lvnp 4444` 成功收到来自目标容器 `172.17.0.3` 的连接，并且在 shell 中执行 `whoami` 返回 `root`。该结果说明命令注入 payload 已在目标环境中执行，漏洞利用成功。
+
+## 六、实验问题与解决方法
 
 
-* **Python 依赖安装受系统环境限制。**
+### （一）Python 依赖安装受系统环境限制
+
   在安装 RouterSploit 和 FirmEmuHub 依赖时，直接执行 `pip3 install -r requirements.txt` 出现 `externally-managed-environment` 报错。这是由于 Ubuntu 系统启用了 PEP 668 机制，限制用户直接向系统 Python 环境中安装第三方包。为解决该问题，实验中改为使用 `python3 -m venv venv` 创建虚拟环境，并通过 `source venv/bin/activate` 激活后再安装依赖，避免了对系统 Python 环境的影响。
 
 
-* **实验文件中的模块路径与实际 RouterSploit 版本不完全一致。**
+### （二）实验文件中的模块路径与实际 RouterSploit 版本不完全一致
+
   在漏洞利用阶段（3.1 节），实验文件中给出的模块路径为 `exploits/routers/generic/samba_command_injection`，但在实际 RouterSploit 环境中执行该命令时，系统提示不存在 `routersploit.modules.exploits.routers.generic` 模块。结合前一步 AutoPwn 扫描结果，实际可用漏洞模块为 `exploits/routers/tenda/ac9_samba_rce`，因此后续漏洞利用阶段改用该模块完成实验。
 
 
-## 六、实验总结
+### （三）Docker 容器网络与反连地址选择
+
+反向 shell 的 `lhost` 不能随意填写为浏览器访问使用的 `127.0.0.1`。由于目标固件运行在 Docker 容器中，容器内部访问宿主机时需要使用 Docker 网桥地址。本实验通过 `ip -4 addr show docker0` 查看到宿主机 Docker 网桥地址为 `172.17.0.1`，因此将 RouterSploit 模块中的 `lhost` 设置为 `172.17.0.1`，最终成功接收到来自容器 `172.17.0.3` 的反向连接。
+
+## 七、实验总结
 
 通过本次实验，我完成了基于 FirmEmuHub 和 RouterSploit 的 IoT 路由器漏洞扫描与利用过程。实验中首先使用 FirmEmuHub 启动 Tenda 路由器固件仿真环境，并通过本地端口成功访问 Web 管理界面，为后续测试提供了目标环境。
 
 随后使用 RouterSploit 的 AutoPwn 模块对目标设备进行漏洞扫描，成功识别出 `exploits/routers/tenda/ac9_samba_rce` 漏洞。根据扫描结果配置对应漏洞利用模块，并设置目标地址、端口、本机反连地址和监听端口，最终通过 `nc` 成功接收到反弹 shell，执行 `whoami` 后返回 `root`，说明漏洞利用成功。
 
 本次实验加深了我对 IoT 固件仿真、RouterSploit 漏洞扫描、Docker 网络映射以及反弹 shell 原理的理解。同时也认识到，路由器等嵌入式设备一旦存在命令注入漏洞，可能导致攻击者获得设备控制权限，因此在实际开发和部署中应重视输入校验、权限控制和固件安全更新。
+
+## 参考资料
+
+1. 《RouterSploit 工具使用》0x09，课程实验资料，2026-05-24。
+2. RouterSploit 项目仓库：https://github.com/threat9/routersploit
+3. FirmEmuHub 项目仓库：https://github.com/a101e-lab/FirmEmuHub
+4. pwntools 官方文档：https://docs.pwntools.com/
+5. Docker 官方文档：https://docs.docker.com/
