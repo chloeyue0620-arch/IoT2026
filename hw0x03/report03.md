@@ -1,26 +1,59 @@
-# 系统态固件仿真实验报告
+# 实验三：系统态固件仿真实验报告
 
 ## 一、实验目的
 
-（1）掌握系统态固件仿真的基本原理与技术路线。
-
-（2）使用开源工具 **FirmEmuHub** 完成指定基准固件的完整仿真流程。
-
-（3）在仿真环境中复现固件相关漏洞（本实验为 **CVE-2020-10213** 命令注入漏洞）。
+- 掌握系统态固件仿真的基本原理、实验流程和常见调试方法。
+- 使用开源工具 FirmEmuHub 完成指定基准固件 `BM-2024-00003` 的仿真启动。
+- 通过浏览器访问仿真固件的 Web 管理界面，验证固件服务是否正常运行。
+- 复现固件中的 CVE-2020-10213 命令注入漏洞，理解 CGI 参数过滤不当导致远程命令执行的原因。
 
 ## 二、实验环境
 
-**平台**：宿主机为 Apple 芯片，通过 **Parallels Desktop** 运行 **Ubuntu 24.04** 虚拟机；虚拟机为 **ARM64（aarch64）**，分配内存 **6GB**。
-
-**项目**：`https://github.com/a101e-lab/FirmEmuHub`，本实验基准 **`./Benchmark/BM-2024-00003`**。
-
-| 软件 | 版本 |
+| 项目 | 配置 |
 |------|------|
-| Docker | 28.2.2（build 28.2.2-0ubuntu1~24.04.1） |
+| 计算机型号 | Apple MacBook Air |
+| 处理器型号 | Apple M4 |
+| 虚拟化平台 | Parallels Desktop |
+| 实验系统 | Ubuntu 24.04 |
+| 系统架构 | ARM64 / aarch64 |
+| 分配内存 | 6 GB |
+| 固件仿真工具 | FirmEmuHub |
+| 实验基准 | `./Benchmark/BM-2024-00003` |
+| Docker | 28.2.2 |
 | Git | 2.43.0 |
 | Python | 3.12.3 |
+| 漏洞验证工具 | Burp Suite Community Edition、curl |
 
-**跨架构说明**：该基准的 `Dockerfile` 使用 **`linux/amd64`** 基础镜像（如 `fitzbc/fat_ubuntu1604:v6`）。在 ARM 虚拟机上构建/运行容器时，需注册 **QEMU binfmt**，并在启动仿真前设置 **`DOCKER_DEFAULT_PLATFORM=linux/amd64`**，用 **`sudo -E python3 emulation.py ...`** 将变量传入 `sudo` 环境（见下文过程）。
+实验手册建议使用 Ubuntu 作为主机系统，因为 Kali 环境中可能出现固件仿真失败。本实验在 Apple 芯片 Mac 上通过 Parallels 运行 ARM64 Ubuntu，因此还需要处理 amd64 Docker 镜像在 ARM64 主机上的跨架构运行问题。
+
+## 三、实验原理与基础知识
+
+### （一）系统态固件仿真原理
+
+系统态固件仿真是指尽可能完整地启动固件运行环境，使固件中的 Web 服务、网络服务和后台进程在仿真环境中运行。与单独分析某个二进制程序相比，系统态仿真更接近真实设备运行状态，适合进行 Web 接口测试、漏洞复现和动态行为观察。
+
+本实验使用 FirmEmuHub 对固件进行系统态仿真。FirmEmuHub 会根据基准目录中的配置文件构建 Docker 镜像，启动容器，并在容器中运行固件仿真脚本，从而暴露固件的 Web 管理服务。
+
+### （二）FirmEmuHub 仿真流程
+
+执行以下命令后，FirmEmuHub 会自动完成固件仿真启动流程：
+
+```bash
+sudo python3 emulation.py -b ./Benchmark/BM-2024-00003
+```
+
+其主要流程包括：
+
+- 读取 `./Benchmark/BM-2024-00003/benchmark.yml`，获取固件信息、远程地址和服务端口配置。
+- 使用 `./Benchmark/BM-2024-00003/emulation` 目录作为 Docker 构建上下文。
+- 构建固件仿真镜像，并生成随机容器名称，避免容器命名冲突。
+- 以特权模式启动 Docker 容器，设置 `REMOTE_IP=192.168.0.1`、`REMOTE_PORT=80` 等环境变量。
+- 通过 `docker inspect` 获取容器端口映射，并轮询访问 `http://0.0.0.0:<映射端口>` 判断服务是否启动成功。
+- 容器内部执行 `run.sh`，启动 SSH、设置端口转发，并运行固件仿真脚本。
+
+### （三）跨架构运行说明
+
+本实验环境为 ARM64，而 `BM-2024-00003` 基准使用的 Docker 基础镜像为 `linux/amd64`。如果不进行跨架构配置，构建或运行容器时可能出现 `exec format error`。因此需要安装 `qemu-user-static` 和 `binfmt-support`，并注册 QEMU binfmt，使 ARM64 主机能够运行 amd64 容器。
 
 ```bash
 sudo apt install -y qemu-user-static binfmt-support
@@ -28,24 +61,50 @@ sudo docker run --rm --privileged tonistiigi/binfmt --install all
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 ```
 
-## 三、实验过程与结果
+由于后续启动仿真时使用 `sudo`，还需要通过 `sudo -E` 保留 `DOCKER_DEFAULT_PLATFORM` 环境变量：
 
-### 第一部分：系统态固件仿真环境搭建
+```bash
+sudo -E python3 emulation.py -b ./Benchmark/BM-2024-00003
+```
 
-**1. 克隆 FirmEmuHub**
+### （四）CVE-2020-10213 漏洞原理
 
-在虚拟机中执行（仓库较大，需等待克隆完成）：
+CVE-2020-10213 是 D-Link DIR-825 路由器固件中的命令注入漏洞。该漏洞存在于 `/sbin/httpd` 的 CGI 处理逻辑中，程序在处理 `wps_sta_enrollee_pin` 参数时没有正确过滤用户输入，导致攻击者可以构造特殊参数打破原有命令结构并执行系统命令。
+
+实验中使用的 Payload 为：
+
+```text
+wps_sta_enrollee_pin=a%27%24%28reboot%29%27b
+```
+
+该参数 URL 解码后为：
+
+```text
+a'$(reboot)'b
+```
+
+其中，单引号用于闭合原命令中的字符串，`$(reboot)` 是 shell 命令替换语法。如果漏洞触发成功，固件系统会执行 `reboot`，表现为 Web 服务中断、连接被重置或 `curl` 返回 `Empty reply from server`。
+
+## 四、实验内容
+
+### （一）系统态固件仿真环境搭建
+
+#### 1. 克隆 FirmEmuHub 仓库
+
+在 Ubuntu 虚拟机中克隆 FirmEmuHub 项目，并进入项目目录：
 
 ```bash
 git clone https://github.com/a101e-lab/FirmEmuHub.git
 cd FirmEmuHub
 ```
 
-![克隆 FirmEmuHub](image/1.1.png)
+![克隆 FirmEmuHub 仓库](image/1.1.png)
 
-**2. Python 虚拟环境与依赖**
+截图显示 FirmEmuHub 仓库已开始下载。由于仓库中包含多个基准固件和仿真文件，克隆过程耗时较长，需要等待仓库完整拉取后再进行后续依赖安装。
 
-安装 venv、在项目目录创建环境并安装 `requirements.txt`：
+#### 2. 创建 Python 虚拟环境并安装依赖
+
+为避免依赖污染系统 Python 环境，在项目目录中创建并激活虚拟环境，然后安装 `requirements.txt` 中列出的依赖：
 
 ```bash
 sudo apt update
@@ -57,40 +116,39 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-![安装 requirements.txt](image/1.2.png)
+![安装 Python 依赖](image/1.2.png)
 
-**问题与处理**：若在用户主目录 `~` 下执行 `source venv/bin/activate` 报错 **`No such file or directory`**，原因是虚拟环境在 **`~/FirmEmuHub/venv`**，须先 **`cd ~/FirmEmuHub`** 再激活。
+截图显示 Python 依赖安装过程已经执行。实验中曾遇到在用户主目录 `~` 下执行 `source venv/bin/activate` 报错的问题，原因是虚拟环境实际位于 `~/FirmEmuHub/venv`，需要先进入项目目录再激活虚拟环境。
 
-**3. Docker 权限与可用性**
+#### 3. 验证 Docker 可用性
 
-将用户加入 `docker` 组后，**当前登录会话不会自动带上新组**，直接 `docker run` 可能 **`permission denied ... docker.sock`**。处理：**`newgrp docker`** 或注销/重启后再开终端；或临时统一使用 **`sudo docker ...`**。
+FirmEmuHub 依赖 Docker 构建并运行固件仿真环境，因此需要确认 Docker 能正常运行：
 
 ```bash
 docker run --rm hello-world
 ```
 
-![Docker hello-world 成功](image/1.3.png)
+![Docker hello-world 验证成功](image/1.3.png)
 
-**4. ARM 主机上的跨架构支持（避免 `exec format error`）**
+截图显示 Docker 能够成功运行测试容器，说明 Docker 服务可用。实验中如果直接运行 Docker 出现 `permission denied ... docker.sock`，说明当前用户尚未获得 Docker 组权限，可以使用 `newgrp docker`、重新登录，或临时使用 `sudo docker` 执行命令。
 
-基准镜像为 **amd64**，在 **ARM64** 虚拟机上未配置时构建会出现 **`exec /bin/sh: exec format error`**。处理：安装 **qemu-user-static**、注册 binfmt；注册命令需对 Docker 有权限，应使用 **`sudo docker run --rm --privileged tonistiigi/binfmt --install all`**（若不加 `sudo` 会同样报 `docker.sock` 权限错误）。
+#### 4. 配置跨架构支持
+
+由于实验主机为 ARM64，而基准镜像为 amd64，需要注册 QEMU binfmt：
 
 ```bash
 sudo apt install -y qemu-user-static binfmt-support
 sudo docker run --rm --privileged tonistiigi/binfmt --install all
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
 ```
 
-**5. 仿真前环境变量**
+该步骤用于避免容器构建或运行时出现 `exec /bin/sh: exec format error`。注册完成后，Docker 可以借助 QEMU 用户态模拟运行 amd64 镜像。
 
-每次启动仿真前在同一终端执行 **`export DOCKER_DEFAULT_PLATFORM=linux/amd64`**；运行脚本时用 **`sudo -E python3 emulation.py ...`**，以便把该变量传入 `sudo` 环境。构建时若出现镜像平台与主机不一致的 **Warning**，在已配置 binfmt 的前提下可继续。
+### （二）固件仿真启动
 
----
+#### 1. 执行一键仿真命令
 
-### 第二部分：固件仿真
-
-**1. 启动命令**
-
-在 `FirmEmuHub` 目录激活 venv，设置平台变量后执行一键仿真：
+在 `FirmEmuHub` 目录中激活虚拟环境，设置平台变量，然后启动 `BM-2024-00003` 固件仿真：
 
 ```bash
 cd ~/FirmEmuHub
@@ -99,21 +157,29 @@ export DOCKER_DEFAULT_PLATFORM=linux/amd64
 sudo -E python3 emulation.py -b ./Benchmark/BM-2024-00003
 ```
 
-**2. 第一次运行：脚本报失败**
+这里使用 `sudo -E` 的原因是保留当前终端中的 `DOCKER_DEFAULT_PLATFORM=linux/amd64` 环境变量，确保 Docker 按 amd64 平台构建和运行镜像。
 
-![error](image/error.png)
+#### 2. 第一次运行失败现象
 
-镜像可构建成功、容器可启动，但 **`emulation.py`** 轮询 **20 次**后仍提示 **`Service failed to start`**、**`The firmware emulation failed at 0.0.0.0:32768`**。**`sudo docker ps -a`** 显示容器 **`bm-2024-00003_j78hr5`** 仍为 **`Up`**，映射 **`32768->80`**，说明失败来自**健康检查超时**，而非容器立刻退出。
+![第一次仿真健康检查失败](image/error.png)
 
-**3. 宿主机验证**
+截图显示容器镜像可以构建并启动，但 `emulation.py` 在轮询 20 次后提示 `Service failed to start`，并显示固件仿真在 `0.0.0.0:32768` 启动失败。结合 `docker ps -a` 观察，容器仍处于 `Up` 状态且端口已映射，说明该问题更可能是健康检查超时或 Web 服务未正常响应，而不是容器立即退出。
 
-对映射端口执行 **`curl -v http://127.0.0.1:32768/`**，得到 **`Empty reply from server`（curl 52）**：TCP 通但无正常 HTTP 响应。
+#### 3. 使用 curl 检查服务响应
 
-![curl](image/curl.png)
+对映射端口执行 HTTP 访问测试：
 
-**4. 清理后第二次运行**
+```bash
+curl -v http://127.0.0.1:32768/
+```
 
-删除旧容器与本地镜像标签后重新执行第 1 步命令：
+![curl 检查仿真服务](image/curl.png)
+
+截图显示 `curl` 返回 `Empty reply from server`。该现象说明 TCP 连接能够建立，但服务端没有返回合法 HTTP 响应，进一步印证第一次运行时容器虽已启动，但固件 Web 服务尚未正常提供页面。
+
+#### 4. 清理旧容器与镜像后重新运行
+
+删除第一次运行产生的旧容器和镜像标签，再重新执行仿真命令：
 
 ```bash
 sudo docker rm -f bm-2024-00003_j78hr5
@@ -124,68 +190,99 @@ export DOCKER_DEFAULT_PLATFORM=linux/amd64
 sudo -E python3 emulation.py -b ./Benchmark/BM-2024-00003
 ```
 
-新容器 **`bm-2024-00003_ulzu96`**；健康检查于 **第 5/20 次** 通过，提示 **`Service started successfully`**；主机 **`0.0.0.0:32769` → 容器 80**（**`-P` 端口每次可能不同，以终端为准**）。
+![仿真构建与健康检查成功](image/2.4.png)
 
-![仿真构建与健康检查成功](image/截屏2026-03-23%2018.17.01.png)
+截图显示第二次运行时新容器 `bm-2024-00003_ulzu96` 启动成功，健康检查在第 5 次尝试时通过，并提示 `Service started successfully`。本次主机映射端口为 `32769`，说明固件 Web 服务已经能够被访问。需要注意，Docker 使用 `-P` 自动映射端口时，每次运行得到的端口可能不同，应以终端实际输出为准。
 
-**5. Web 访问**
+#### 5. 访问固件 Web 管理界面
+
+先查看 Ubuntu 虚拟机 IP 地址：
+
 ```bash
-parallels@ubuntu-linux-2404:~/FirmEmuHub$ hostname -I
-10.211.55.29 172.17.0.1 fdb2:2c26:f4e4:0:c7b5:e005:2084:90f7 fdb2:2c26:f4e4:0:4639:6cca:7ddf:d5f1 
+hostname -I
 ```
 
-浏览器访问 **`http://10.211.55.29:32769`**
+本实验中 Ubuntu 虚拟机地址为 `10.211.55.29`，结合仿真输出的映射端口，在浏览器中访问：
 
-![仿真 Web 管理界面](image/截屏2026-03-23%2018.20.23.png)
+```text
+http://10.211.55.29:32769
+```
 
----
+![仿真 Web 管理界面](image/2.5.png)
 
-### 第三部分：漏洞复现（CVE-2020-10213）
+截图显示浏览器成功访问到固件 Web 管理页面，说明 FirmEmuHub 已经完成系统态固件仿真，固件中的 Web 服务被成功暴露到宿主访问地址。
 
-**1. 目标与工具**
+### （三）漏洞复现：CVE-2020-10213
 
-在仿真 Web 可达的前提下，使用 **Burp Suite Community Edition** 的 **Repeater** 模块，手工构造并发送 **HTTP** 请求，验证 **CVE-2020-10213** 命令注入路径。
+#### 1. 准备 Burp Repeater 请求
 
-**2. 请求格式**
+在固件 Web 可访问的前提下，打开 Burp Suite Community Edition，进入 Repeater 模块，构造如下 POST 请求：
 
-**方法路径**：**`POST /set_sta_enrollee_pin.cgi`**，协议 **HTTP/1.1**。
+```http
+POST /set_sta_enrollee_pin.cgi HTTP/1.1
+Host: 10.211.55.29:32769
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 111
+Connection: close
 
-**目标**：与本实验仿真映射一致，**`Host: 10.211.55.29:32769`**（与 **`hostname -I`** 中虚拟机地址及 **`docker -P`** 映射端口一致）。
+wps_sta_enrollee_pin=a%27%24%28reboot%29%27b&html_response_page=do_wps.asp&html_response_return_page=do_wps.asp
+```
 
-**头字段**：**`Content-Type: application/x-www-form-urlencoded`**，并设置与 Body 长度一致的 **`Content-Length`**（本请求为 **111**）；可按需使用 **`Connection: close`**。
+该请求访问的 CGI 路径为 `/set_sta_enrollee_pin.cgi`，注入参数为 `wps_sta_enrollee_pin`。其中 `html_response_page=do_wps.asp` 和 `html_response_return_page=do_wps.asp` 是正常表单参数，用于保持请求格式与固件接口预期一致。
 
-**Body**：除注入参数外，包含手册要求的 **`html_response_page=do_wps.asp`**、**`html_response_return_page=do_wps.asp`**。
+#### 2. 发送漏洞利用请求
 
-**3. Payload 要点**
+![Burp Repeater 构造漏洞利用请求](image/3.2.png)
 
-参数 **`wps_sta_enrollee_pin`** 在请求体中为 **URL 编码**形式：**`a%27%24%28reboot%29%27b`**，解码后为 **`a'$(reboot)'b`**：单引号用于闭合原命令中的引号，**`$(reboot)`** 为 **shell 命令替换**，从而在设备侧执行 **`reboot`**，作为命令注入是否成立的判据。
+截图显示 Burp Repeater 中已经构造并发送包含命令注入载荷的 POST 请求。若 `reboot` 命令成功执行，仿真固件内部系统会重启，响应区可能出现空响应、连接中断或长时间无法获得完整 HTTP 响应，这与真实设备重启时的现象一致。
 
-**4. Burp Repeater 实测**
+#### 3. 使用 curl 验证利用结果
 
-在 **Repeater → Raw** 中粘贴并核对上述请求后点击 **Send**。下图为本实验构造的原始请求（含 **Host**、**Content-Type** 与 **Body**）；若 **`reboot`** 生效，仿真内系统重启，**响应区可能为空、连接被重置或长时间无完整 HTTP 响应**，与真实设备被重启后的表现一致。
-
-![Burp Repeater 构造 POST 与 wps_sta_enrollee_pin 注入载荷](image/截屏2026-03-23%2018.49.03.png)
-
-**5. 宿主机侧验证（curl）**
-
-在虚拟机内对仿真地址仅取响应头进行探测：
+发送漏洞利用请求后，在 Ubuntu 虚拟机中使用 `curl` 检查 Web 服务响应：
 
 ```bash
 curl -I http://10.211.55.29:32769
 ```
 
-发送漏洞利用请求后，服务可能已崩溃或正在重启，**`curl`** 报错 **`curl: (52) Empty reply from server`**：表示 **TCP 能建立但服务端未返回合法 HTTP 报文**，可与 **Burp** 侧无正常响应相互印证。
+![curl 验证 Empty reply from server](image/3.3.png)
 
-![curl -I 出现 Empty reply from server](image/截屏2026-03-23%2018.51.51.png)
+截图显示 `curl` 返回 `curl: (52) Empty reply from server`。该结果表示客户端能够连接到目标地址，但服务端没有返回有效 HTTP 报文。结合 Burp 发送的 `reboot` 注入载荷，可以判断固件服务受到影响，漏洞复现结果符合实验手册对 CVE-2020-10213 的预期描述。
 
----
+## 五、实验问题分析
 
-## 四、实验问题总结
+### （一）Docker 权限问题
 
-在固件仿真启动阶段出现了较明显的兼容性与调试问题。运行 emulation.py 后，曾一度出现容器日志报错、根文件系统挂载失败、平台架构不一致等现象，例如镜像为 linux/amd64，而当前虚拟机宿主平台为 linux/arm64/v8。此外，仿真启动本身也需要较长时间，手册中也提示若多次尝试仍未成功，应优先使用 Ubuntu 而非 Kali 作为实验环境。经过重新检查 Docker 状态、等待服务启动并确认映射端口后，最终才成功访问到固件 Web 管理页面。
+实验中 Docker 命令可能因当前用户没有访问 `/var/run/docker.sock` 的权限而失败。该问题可以通过将用户加入 `docker` 组后重新登录、执行 `newgrp docker`，或在实验命令前临时使用 `sudo` 解决。
 
----
+### （二）ARM64 与 amd64 架构不一致
 
-## 五、实验总结
+由于 Apple M4 对应的 Ubuntu 虚拟机为 ARM64，而实验基准 Docker 镜像为 amd64，如果未注册 QEMU binfmt，就会出现 `exec format error`。通过安装 `qemu-user-static`、`binfmt-support` 并执行 `tonistiigi/binfmt --install all` 后，可以让 Docker 借助 QEMU 运行 amd64 容器。
 
-本实验在 **ARM64 Ubuntu（Parallels，6GB 内存）** 上，借助 **QEMU binfmt** 与 **`DOCKER_DEFAULT_PLATFORM=linux/amd64`、`sudo -E`**，完成 **FirmEmuHub** 依赖安装、**BM-2024-00003** 镜像构建与容器启动；在经历首次健康检查失败及容器日志中的 **kernel panic** 后，通过删除旧容器与镜像并重新执行 **`emulation.py`**，最终在 **`http://10.211.55.29:32769`** 稳定访问仿真 Web。漏洞复现部分使用 **Burp Suite Repeater** 向 **`/set_sta_enrollee_pin.cgi`** 提交 **URL 编码**的 **`wps_sta_enrollee_pin`** 命令注入载荷，并结合 **`curl -I`** 观察到 **`curl: (52) Empty reply from server`**，与 **CVE-2020-10213** 利用 **`reboot`** 后的预期现象一致。通过本次实验，巩固了系统态固件仿真工具链的使用方法，以及对 **CGI 参数未过滤导致的命令注入** 及其验证方式的理解。
+### （三）健康检查超时问题
+
+第一次执行 `emulation.py` 时出现 `Service failed to start`，但容器仍处于运行状态，说明失败不一定代表 Docker 容器完全启动失败，也可能是固件 Web 服务响应较慢或健康检查接口未返回预期内容。通过 `docker ps -a`、端口映射信息和 `curl` 返回结果综合判断后，清理旧容器与镜像并重新运行，最终健康检查通过。
+
+### （四）自动映射端口变化
+
+FirmEmuHub 启动容器时使用 Docker 自动端口映射，主机端口每次运行可能不同。本实验第一次映射为 `32768`，第二次成功运行时映射为 `32769`。因此访问 Web 页面和构造 Burp 请求时，必须以当前终端输出的实际 IP 与端口为准。
+
+## 六、实验总结
+
+本次实验在 ARM64 Ubuntu 环境中完成了 FirmEmuHub 的安装配置、跨架构 Docker 支持配置、`BM-2024-00003` 固件仿真启动以及 Web 管理界面访问，并通过 Burp Suite 和 curl 成功复现了 CVE-2020-10213 命令注入漏洞。
+
+通过本次实验，加深了对以下内容的理解：
+
+- **系统态固件仿真**：FirmEmuHub 通过 Docker 容器化方式运行固件仿真环境，相比用户态分析更接近真实设备运行状态，适合进行 Web 接口测试、漏洞复现和动态行为观察。
+- **跨架构 Docker 运行**：在 ARM64 主机上运行 amd64 镜像需要借助 `qemu-user-static` 和 `binfmt-support` 注册 QEMU binfmt，并设置 `DOCKER_DEFAULT_PLATFORM` 环境变量，否则会出现 `exec format error`。
+- **容器健康检查机制**：`emulation.py` 通过轮询方式检测固件服务是否启动成功，首次运行时可能因服务响应较慢导致健康检查超时，清理旧容器与镜像后重新运行可以有效解决。
+- **CGI 命令注入漏洞**：CVE-2020-10213 的根因是 `/sbin/httpd` 在处理 `wps_sta_enrollee_pin` 参数时未正确过滤用户输入，攻击者通过构造 `$(cmd)` 语法可实现远程命令执行。`curl` 返回 `Empty reply from server` 可作为漏洞触发的侧面验证。
+
+本次实验为后续开展固件安全分析、漏洞挖掘和 IoT 设备安全测试提供了方法基础和实践经验。
+
+## 参考资料
+
+1. 《系统态固件仿真实验手册》0x03，课程实验资料，2025-03-10。
+2. FirmEmuHub 项目仓库：https://github.com/a101e-lab/FirmEmuHub
+3. OWASP Firmware Security Testing Methodology：https://github.com/scriptingxss/owasp-fstm
+4. QEMU 官方文档：https://www.qemu.org/docs/master/
+5. Docker 官方文档：https://docs.docker.com/
